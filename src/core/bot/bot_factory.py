@@ -1,0 +1,924 @@
+import random
+import threading
+
+import src.core.config
+from AnkamaLauncherEmulator.ankama_launcher_emulator.interfaces.credentials import (
+    DecipheredApiKey,
+    DecipheredCertif,
+    StoredApiKey,
+)
+from src import consts
+from src.controller.settings import SettingsService
+from src.core.behaviors.account.character_creation_behavior import (
+    CharacterCreationBehavior,
+)
+from src.core.behaviors.account.ogrine_subscription import (
+    OgrineSubscriptionBehavior,
+)
+from src.core.behaviors.account.paysafecard_subscription import (
+    PaysafecardSubscriptionBehavior,
+)
+from src.core.behaviors.craft.craft_behavior import CraftBehavior
+from src.core.behaviors.farms.auto_bot_behavior import AutoBotBehavior
+from src.core.behaviors.farms.fight.attacker_behavior import AttackerBehavior
+from src.core.behaviors.farms.fight.custom_fight_turn_behavior import (
+    CustomFightTurnBehavior,
+)
+from src.core.behaviors.farms.fight.fight_behavior import FightBehavior
+from src.core.behaviors.farms.fight.fight_control import FightControl
+from src.core.behaviors.farms.fight.fight_movement_behavior import FightMovementBehavior
+from src.core.behaviors.farms.fight.fight_preparation_behavior import (
+    FightPreparationBehavior,
+)
+from src.core.behaviors.farms.fight.fight_spell_behavior import FightSpellBehavior
+from src.core.behaviors.farms.fight.fight_turn_behavior import FightTurnBehavior
+from src.core.behaviors.farms.fight.fighter_behavior import FighterBehavior
+from src.core.behaviors.farms.harvest.harvester_behavior import HarvesterBehavior
+from src.core.behaviors.farms.harvest.multi_farming_behavior import MultiFarmingBehavior
+from src.core.behaviors.farms.random_farm_behavior import RandomFarmBehavior
+from src.core.behaviors.idle_behavior import IdleBehavior
+from src.core.behaviors.interactives.collect_behavior import CollectBehavior
+from src.core.behaviors.interactives.fake_bad_interactive_behavior import (
+    FakeBadInteractiveBehavior,
+)
+from src.core.behaviors.interactives.interactive_behavior import InteractiveBehavior
+from src.core.behaviors.items.acquire_items_behavior import AcquireItemsBehavior
+from src.core.behaviors.items.auto_equipment_behavior import AutoEquipmentBehavior
+from src.core.behaviors.items.auto_equipment_from_inventory_behavior import (
+    AutoEquipmentFromInventoryBehavior,
+)
+from src.core.behaviors.movements.auto_trip.auto_trip_behavior import AutoTripBehavior
+from src.core.behaviors.movements.auto_trip.auto_trip_explorator_behavior import (
+    AutoTripExploratorBehavior,
+)
+from src.core.behaviors.movements.auto_trip.auto_trip_smart_behavior import (
+    AutoTripSmartBehavior,
+)
+from src.core.behaviors.movements.auto_trip.auto_trip_zaap_behavior import (
+    AutoTripZaapBehavior,
+)
+from src.core.behaviors.movements.edge_behavior import EdgeBehavior
+from src.core.behaviors.movements.fake_bad_movement_behavior import (
+    FakeBadMovementBehavior,
+)
+from src.core.behaviors.movements.map_change_behavior import MapChangeBehavior
+from src.core.behaviors.movements.map_move_behavior import MapMoveBehavior
+from src.core.behaviors.movements.map_movement_cancel_behavior import MapMovementCancelBehavior
+from src.core.behaviors.movements.waypoint_behavior import WaypointBehavior
+from src.core.behaviors.npcs.npc_dialog_behavior import NpcDialogBehavior
+from src.core.behaviors.quests.dungeon_behavior import DungeonBehavior
+from src.core.behaviors.quests.tutorial_behavior import TutorialBehavior
+from src.core.behaviors.recovery_behavior import BlockingStateRecovery
+from src.core.behaviors.sale_hotel.enter_sale_hotel_behavior import (
+    EnterSaleHotelBehavior,
+)
+from src.core.behaviors.sale_hotel.enter_sale_hotel_sell_behavior import (
+    EnterSaleHotelSellBehavior,
+)
+from src.core.behaviors.sale_hotel.sale_hotel_buy_behavior import SaleHotelBuyBehavior
+from src.core.behaviors.sale_hotel.sale_hotel_reprice_behavior import (
+    SaleHotelRepriceBehavior,
+)
+from src.core.behaviors.sale_hotel.sale_hotel_sell_behavior import (
+    SaleHotelSellBehavior,
+)
+from src.core.behaviors.socket.connection_behavior import ConnectionBehavior
+from src.core.behaviors.socket.game_session_behavior import GameSessionBehavior
+from src.core.behaviors.socket.handshake_behavior import HandshakeBehavior
+from src.core.behaviors.socket.heartbeat_behavior import HearthBeatBehavior
+from src.core.behaviors.storage.enter_chests.enter_bank_chest_behavior import (
+    EnterBankChestBehavior,
+)
+from src.core.behaviors.storage.enter_chests.enter_guild_chest_behavior import (
+    EnterGuildChestBehavior,
+)
+from src.core.behaviors.storage.loads.load_from_bank_behavior import (
+    LoadFromBankBehavior,
+)
+from src.core.behaviors.storage.loads.load_from_guild_chest_behavior import (
+    LoadFromGuildChestBehavior,
+)
+from src.core.behaviors.storage.loads.load_recipe_behavior import LoadRecipeBehavior
+from src.core.behaviors.storage.loads.load_recipe_from_bank_chest_behavior import (
+    LoadRecipeFromBankChestBehavior,
+)
+from src.core.behaviors.storage.loads.load_recipe_from_guild_chest_behavior import (
+    LoadRecipeFromGuildChestBehavior,
+)
+from src.core.behaviors.storage.mule.mule_accept_behavior import MuleAcceptBehavior
+from src.core.behaviors.storage.mule.mule_exchange_behavior import MuleExchangeBehavior
+from src.core.behaviors.storage.mule.mule_give_behavior import MuleGiveBehavior
+from src.core.behaviors.storage.unloads.unload_behavior import UnloadBehavior
+from src.core.behaviors.storage.unloads.unload_in_bank_behavior import (
+    UnloadInBankBehavior,
+)
+from src.core.behaviors.storage.unloads.unload_in_guild_chest_behavior import (
+    UnloadInGuildChestBehavior,
+)
+from src.core.bot.bot import Bot
+from src.core.engine.fights.attack.attacker import Attacker
+from src.core.engine.fights.attack.breed_abilities import BreedAbilitySelector
+from src.core.engine.fights.damage_calculator import DamageCalculator
+from src.core.engine.fights.reachable_cells.fight_reachable_cells import (
+    FightReachableCells,
+)
+from src.core.engine.movements.map.map_data_adapter import DataMapProvider
+from src.core.engine.movements.map.path_finding.path_finding import Pathfinding
+from src.core.engine.movements.world.astar_allow_capability import AstarAllowHavreSac
+from src.core.engine.movements.world.astar_vertice import AstarWorld
+from src.core.engine.movements.world.world_path_finder import WorldPathFinder
+from src.core.engine.weights.weighted_path import WeightedPath
+from src.core.events_manager.event_manager import EventManager
+from src.core.frames.bank_chest_frame import BankChestFrame
+from src.core.frames.chat_frame import ChatFrame
+from src.core.frames.craft_frame import CraftFrame
+from src.core.frames.dialog_frame import DialogFrame
+from src.core.frames.entity_frame import EntityFrame
+from src.core.frames.fight_frame import FightFrame
+from src.core.frames.guild_chest_frame import GuildChestFrame
+from src.core.frames.interactive_frame import InteractiveFrame
+from src.core.frames.inventory_frame import InventoryFrame
+from src.core.frames.map_frame import MapFrame
+from src.core.frames.party_frame import PartyFrame
+from src.core.frames.player_frame import PlayerFrame
+from src.core.frames.player_info_snapshot_frame import PlayerInfoSnapshotFrame
+from src.core.frames.sale_hotel_frame import SaleHotelFrame
+from src.core.frames.server_frame import ServerFrame
+from src.core.signals.bot_signals import BotSignals
+from src.core.signals.grid_signals import GridSignals
+from src.core.signals.log_signals import LogSignals
+from src.core.signals.message_signals import MessageInfoSignals
+from src.core.signals.player_signals import GameInfoSignals, InventorySignals
+from src.core.signals.shared_farm_signals import SharedSignals
+from src.core.signals.world_signals import WorldSignals
+from src.core.states.state_factory import StateFactory
+from src.lua.script_behavior import LuaScriptBehavior
+from src.discord_bot.config import load_discord_bot_config
+from src.services.debug_recorder import create_bot_session_debug_recorder
+from src.services.discord_notifier import DiscordNotifier
+from src.services.logging_utils.loggers import BotLogger
+from src.services.play_recorder import create_bot_session_play_recorder
+
+
+def _load_discord_notifier(logger: BotLogger) -> DiscordNotifier:
+    """Create a Discord notifier from the environment, falling back to unconfigured.
+
+    Missing or invalid Discord configuration must not prevent the game bot from
+    running; it simply disables Discord alerts.
+    """
+    try:
+        config = load_discord_bot_config()
+    except ValueError:
+        return DiscordNotifier(bot_token=None, channel_id=None, _logger=logger)
+    return DiscordNotifier(
+        bot_token=config.bot_token,
+        channel_id=config.notification_channel_id,
+        _logger=logger,
+    )
+
+
+class BotFactory:
+    @staticmethod
+    def create_bot(shared_signals: SharedSignals, account: StoredApiKey, is_fake: bool = False):
+        harvester_signals = BotSignals()
+        game_info_signals = GameInfoSignals()
+        msg_info_signals = MessageInfoSignals()
+        grid_signals = GridSignals()
+        inventory_signals = InventorySignals()
+        world_signals = WorldSignals()
+        log_signals = LogSignals()
+
+        is_playing_event = threading.Event()
+        is_connected_event = threading.Event()
+        is_ready_to_play_event = threading.Event()
+
+        title = account.apikey.login
+        debug_recorder = (
+            create_bot_session_debug_recorder(consts.BOT_DEBUG_LOGS_DIR, title)
+            if src.core.config.DEBUG
+            else None
+        )
+        play_recorder = (
+            create_bot_session_play_recorder(
+                src.core.config.PLAY_RECORDING_DIR,
+                title,
+                profile=src.core.config.PLAY_RECORDING_PROFILE,
+                retention_days=src.core.config.PLAY_RECORDING_RETENTION_DAYS,
+            )
+            if src.core.config.PLAY_RECORDING_ENABLED
+            else None
+        )
+        logger = BotLogger(title=title, log_signals=log_signals, debug_recorder=debug_recorder)
+
+        discord_notifier = _load_discord_notifier(logger)
+
+        event_manager = EventManager(_logger=logger, debug_recorder=debug_recorder)
+
+        game_state = StateFactory.create_game_state(
+            inventory_signals=inventory_signals,
+            game_info_signals=game_info_signals,
+            grid_signals=grid_signals,
+            logger=logger,
+            login=account.apikey.login,
+        )
+
+        game_state.apply_settings(SettingsService().get().behaviors)
+
+        data_map_provider = DataMapProvider()
+        path_finding = Pathfinding(
+            data_map_provider=data_map_provider,
+            logger=logger,
+        )
+        astar_world = AstarWorld()
+        world_path_finder = WorldPathFinder(
+            path_finding=path_finding,
+            astar_world=astar_world,
+        )
+        fight_reachable_cells = FightReachableCells()
+        damage_calculator = DamageCalculator()
+        attacker = Attacker(
+            _logger=logger,
+            fight_reachable_cells=fight_reachable_cells,
+            damage_calculator=damage_calculator,
+        )
+        breed_ability_selector = BreedAbilitySelector(
+            _logger=logger,
+            fight_reachable_cells=fight_reachable_cells,
+            damage_calculator=damage_calculator,
+        )
+
+        entity_frame = EntityFrame(
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            game_info_signals=game_info_signals,
+            inventory_signals=inventory_signals,
+            is_playing_event=is_playing_event,
+        )
+        bank_chest_frame = BankChestFrame(
+            _logger=logger,
+            event_manager=event_manager,
+            game_state=game_state,
+            game_info_signals=game_info_signals,
+            inventory_signals=inventory_signals,
+            is_playing_event=is_playing_event,
+        )
+        interactive_frame = InteractiveFrame(
+            event_manager=event_manager,
+            inventory_signals=inventory_signals,
+            game_state=game_state,
+            _logger=logger,
+            game_info_signals=game_info_signals,
+            is_playing_event=is_playing_event,
+        )
+        inventory_frame = InventoryFrame(
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            game_info_signals=game_info_signals,
+            inventory_signals=inventory_signals,
+            is_playing_event=is_playing_event,
+            discord_notifier=discord_notifier,
+        )
+        map_frame = MapFrame(
+            event_manager=event_manager,
+            game_state=game_state,
+            world_signals=world_signals,
+            inventory_signals=inventory_signals,
+            _logger=logger,
+            game_info_signals=game_info_signals,
+            is_playing_event=is_playing_event,
+        )
+        player_frame = PlayerFrame(
+            event_manager=event_manager,
+            game_info_signals=game_info_signals,
+            inventory_signals=inventory_signals,
+            game_state=game_state,
+            _logger=logger,
+            is_playing_event=is_playing_event,
+        )
+        fight_frame = FightFrame(
+            event_manager=event_manager,
+            game_state=game_state,
+            inventory_signals=inventory_signals,
+            _logger=logger,
+            game_info_signals=game_info_signals,
+            is_playing_event=is_playing_event,
+        )
+        server_frame = ServerFrame(
+            event_manager=event_manager,
+            game_state=game_state,
+            game_info_signals=game_info_signals,
+            inventory_signals=inventory_signals,
+            _logger=logger,
+            is_playing_event=is_playing_event,
+        )
+        guild_chest_frame = GuildChestFrame(
+            _logger=logger,
+            event_manager=event_manager,
+            inventory_signals=inventory_signals,
+            game_state=game_state,
+            game_info_signals=game_info_signals,
+            is_playing_event=is_playing_event,
+        )
+        sale_hotel_frame = SaleHotelFrame(
+            game_info_signals=game_info_signals,
+            inventory_signals=inventory_signals,
+            game_state=game_state,
+            event_manager=event_manager,
+            _logger=logger,
+            is_playing_event=is_playing_event,
+        )
+        dialog_frame = DialogFrame(
+            event_manager=event_manager,
+            game_state=game_state,
+            game_info_signals=game_info_signals,
+            inventory_signals=inventory_signals,
+            _logger=logger,
+            is_playing_event=is_playing_event,
+        )
+        craft_frame = CraftFrame(
+            event_manager=event_manager,
+            game_state=game_state,
+            game_info_signals=game_info_signals,
+            inventory_signals=inventory_signals,
+            _logger=logger,
+            is_playing_event=is_playing_event,
+        )
+        player_info_snapshot_frame = PlayerInfoSnapshotFrame(
+            event_manager=event_manager,
+            game_state=game_state,
+            game_info_signals=game_info_signals,
+            inventory_signals=inventory_signals,
+            _logger=logger,
+            is_playing_event=is_playing_event,
+        )
+        party_frame = PartyFrame(
+            event_manager=event_manager,
+            game_state=game_state,
+            game_info_signals=game_info_signals,
+            inventory_signals=inventory_signals,
+            _logger=logger,
+            is_playing_event=is_playing_event,
+        )
+        chat_frame = ChatFrame(
+            event_manager=event_manager,
+            game_state=game_state,
+            game_info_signals=game_info_signals,
+            inventory_signals=inventory_signals,
+            _logger=logger,
+            is_playing_event=is_playing_event,
+            discord_notifier=discord_notifier,
+        )
+
+        map_change_behavior = MapChangeBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+        )
+        map_move_behavior = MapMoveBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            path_finding=path_finding,
+            _logger=logger,
+        )
+        map_move_cancel_behavior = MapMovementCancelBehavior(
+            _logger=logger,
+            event_manager=event_manager,
+            game_state=game_state,
+            path_finding=path_finding,
+            map_move_behavior=map_move_behavior,
+        )
+        interactive_behavior = InteractiveBehavior(
+            game_state=game_state,
+            event_manager=event_manager,
+            map_move_behavior=map_move_behavior,
+            map_movement_cancel_behavior=map_move_cancel_behavior,
+            _logger=logger,
+            path_finding=path_finding,
+        )
+        fight_movement_behavior = FightMovementBehavior(
+            map_move_behavior=map_move_behavior,
+            game_state=game_state,
+            event_manager=event_manager,
+            path_finding=path_finding,
+            _logger=logger,
+            fight_reachable_cells=fight_reachable_cells,
+        )
+        fight_control = FightControl()
+        fight_placement_behavior = FightPreparationBehavior(
+            game_state=game_state,
+            event_manager=event_manager,
+            fight_movement_behavior=fight_movement_behavior,
+            fight_control=fight_control,
+            _logger=logger,
+        )
+        fight_spell_behavior = FightSpellBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+        )
+
+        fight_turn_behavior = FightTurnBehavior(
+            _logger=logger,
+            fight_spell_behavior=fight_spell_behavior,
+            event_manager=event_manager,
+            fight_movement_behavior=fight_movement_behavior,
+            game_state=game_state,
+            attack_selector=attacker,
+            breed_ability_selector=breed_ability_selector,
+        )
+        custom_fight_turn_behavior = CustomFightTurnBehavior(
+            _logger=logger,
+            event_manager=event_manager,
+            game_state=game_state,
+            fight_control=fight_control,
+            fight_movement_behavior=fight_movement_behavior,
+            fight_spell_behavior=fight_spell_behavior,
+        )
+        auto_equipment_from_inventory_behavior = AutoEquipmentFromInventoryBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+        )
+        fight_behavior = FightBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            fight_preparation_behavior=fight_placement_behavior,
+            path_finding=path_finding,
+            _logger=logger,
+            fight_turn_behavior=fight_turn_behavior,
+            custom_fight_turn_behavior=custom_fight_turn_behavior,
+            fight_control=fight_control,
+            login=account.apikey.login,
+            shared_signals=shared_signals,
+            auto_equipment_from_inventory_behavior=auto_equipment_from_inventory_behavior,
+        )
+        edge_behavior = EdgeBehavior(
+            event_manager=event_manager,
+            interactive_behavior=interactive_behavior,
+            game_state=game_state,
+            map_change_behavior=map_change_behavior,
+            map_move_behavior=map_move_behavior,
+            path_finding=path_finding,
+            _logger=logger,
+            fight_behavior=fight_behavior,
+        )
+        auto_trip_behavior = AutoTripBehavior(
+            event_manager=event_manager,
+            world_path_finder=world_path_finder,
+            game_state=game_state,
+            world_signals=world_signals,
+            edge_behavior=edge_behavior,
+            _logger=logger,
+        )
+        npc_dialog_behavior = NpcDialogBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+        )
+        astar_allow_havre_sac = AstarAllowHavreSac()
+        waypoint_behavior = WaypointBehavior(
+            event_manager=event_manager,
+            interactive_behavior=interactive_behavior,
+            game_state=game_state,
+            auto_trip_behavior=auto_trip_behavior,
+            astar_allow_havre_sac=astar_allow_havre_sac,
+            _logger=logger,
+            pathfinding=path_finding,
+        )
+        auto_trip_zaap_behavior = AutoTripZaapBehavior(
+            auto_trip_behavior=auto_trip_behavior,
+            event_manager=event_manager,
+            game_state=game_state,
+            waypoint_behavior=waypoint_behavior,
+            _logger=logger,
+        )
+        auto_trip_explorator_behavior = AutoTripExploratorBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            auto_trip_zaap_behavior=auto_trip_zaap_behavior,
+            _logger=logger,
+        )
+        auto_trip_world_behavior = AutoTripSmartBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            npc_dialog_behavior=npc_dialog_behavior,
+            auto_trip_explorator_behavior=auto_trip_explorator_behavior,
+            _logger=logger,
+        )
+        attacker_behavior = AttackerBehavior(
+            event_manager=event_manager,
+            fight_behavior=fight_behavior,
+            map_movement_cancel_behavior=map_move_cancel_behavior,
+            path_finding=path_finding,
+            game_state=game_state,
+            _logger=logger,
+            bot_signals=harvester_signals,
+            game_info_signals=game_info_signals,
+        )
+        dungeon_behavior = DungeonBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            npc_dialog_behavior=npc_dialog_behavior,
+            attacker_behavior=attacker_behavior,
+            auto_trip_smart_behavior=auto_trip_world_behavior,
+        )
+        tutorial_behavior = TutorialBehavior(
+            _logger=logger, event_manager=event_manager, game_state=game_state
+        )
+        blocking_state_recovery = BlockingStateRecovery(
+            fight_behavior=fight_behavior,
+            dungeon_behavior=dungeon_behavior,
+            tutorial_behavior=tutorial_behavior,
+        )
+        collect_behavior = CollectBehavior(
+            event_manager=event_manager,
+            interactive_behavior=interactive_behavior,
+            game_state=game_state,
+            path_finding=path_finding,
+            _logger=logger,
+        )
+        enter_guild_chest_behavior = EnterGuildChestBehavior(
+            recovery=blocking_state_recovery,
+            interactive_behavior=interactive_behavior,
+            _logger=logger,
+            event_manager=event_manager,
+            auto_trip_world_behavior=auto_trip_world_behavior,
+            path_finding=path_finding,
+            game_state=game_state,
+        )
+        unload_in_guild_chest_behavior = UnloadInGuildChestBehavior(
+            recovery=blocking_state_recovery,
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            interactive_behavior=interactive_behavior,
+            path_finding=path_finding,
+            auto_trip_world_behavior=auto_trip_world_behavior,
+            enter_guild_chest_behavior=enter_guild_chest_behavior,
+        )
+
+        enter_bank_chest_behavior = EnterBankChestBehavior(
+            recovery=blocking_state_recovery,
+            game_state=game_state,
+            auto_trip_world_behavior=auto_trip_world_behavior,
+            _logger=logger,
+            event_manager=event_manager,
+            npc_dialog_behavior=npc_dialog_behavior,
+        )
+
+        unload_in_bank_behavior = UnloadInBankBehavior(
+            recovery=blocking_state_recovery,
+            event_manager=event_manager,
+            auto_trip_world_behavior=auto_trip_world_behavior,
+            game_state=game_state,
+            _logger=logger,
+            enter_bank_chest_behavior=enter_bank_chest_behavior,
+        )
+        enter_sale_hotel_behavior = EnterSaleHotelBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            auto_trip_smart_behavior=auto_trip_world_behavior,
+            interactive_behavior=interactive_behavior,
+        )
+        enter_sale_hotel_sell_behavior = EnterSaleHotelSellBehavior(
+            _logger=logger,
+            game_state=game_state,
+            event_manager=event_manager,
+            enter_sale_hotel_behavior=enter_sale_hotel_behavior,
+        )
+
+        sale_hotel_buy_behavior = SaleHotelBuyBehavior(
+            recovery=blocking_state_recovery,
+            _logger=logger,
+            event_manager=event_manager,
+            game_state=game_state,
+            enter_sale_hotel_behavior=enter_sale_hotel_behavior,
+        )
+        unload_behavior = UnloadBehavior(
+            recovery=blocking_state_recovery,
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            unload_in_bank_behavior=unload_in_bank_behavior,
+            unload_in_guild_chest_behavior=unload_in_guild_chest_behavior,
+        )
+        load_recipe_from_guild_chest_behavior = LoadRecipeFromGuildChestBehavior(
+            recovery=blocking_state_recovery,
+            _logger=logger,
+            game_state=game_state,
+            unload_behavior=unload_behavior,
+            event_manager=event_manager,
+            enter_guild_chest_behavior=enter_guild_chest_behavior,
+        )
+        load_from_guild_chest_behavior = LoadFromGuildChestBehavior(
+            recovery=blocking_state_recovery,
+            event_manager=event_manager,
+            _logger=logger,
+            unload_behavior=unload_behavior,
+            game_state=game_state,
+            enter_guild_chest_behavior=enter_guild_chest_behavior,
+        )
+        load_from_bank_behavior = LoadFromBankBehavior(
+            recovery=blocking_state_recovery,
+            event_manager=event_manager,
+            _logger=logger,
+            unload_behavior=unload_behavior,
+            game_state=game_state,
+            enter_bank_behavior=enter_bank_chest_behavior,
+        )
+        acquire_items_behavior = AcquireItemsBehavior(
+            recovery=blocking_state_recovery,
+            _logger=logger,
+            event_manager=event_manager,
+            game_state=game_state,
+            load_from_bank_behavior=load_from_bank_behavior,
+            sale_hotel_buy_behavior=sale_hotel_buy_behavior,
+        )
+        auto_equipment_behavior = AutoEquipmentBehavior(
+            recovery=blocking_state_recovery,
+            _logger=logger,
+            event_manager=event_manager,
+            game_state=game_state,
+            acquire_items_behavior=acquire_items_behavior,
+        )
+        sale_hotel_prices_behavior = SaleHotelSellBehavior(
+            recovery=blocking_state_recovery,
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            load_from_bank_behavior=load_from_bank_behavior,
+            enter_sale_hotel_sell_behavior=enter_sale_hotel_sell_behavior,
+            load_from_guild_chest_behavior=load_from_guild_chest_behavior,
+        )
+        sale_hotel_reprice_behavior = SaleHotelRepriceBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            enter_sale_hotel_sell_behavior=enter_sale_hotel_sell_behavior,
+        )
+
+        weighted_path = WeightedPath()
+        random_farm_behavior = RandomFarmBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            auto_trip_smart_behavior=auto_trip_world_behavior,
+            weighted_path=weighted_path,
+            world_signals=world_signals,
+            edge_behavior=edge_behavior,
+            report_status=harvester_signals.automation_status_changed.emit,
+            _logger=logger,
+        )
+        mule_give_behavior = MuleGiveBehavior(
+            recovery=blocking_state_recovery,
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            auto_trip_smart_behavior=auto_trip_world_behavior,
+        )
+        mule_exchange_behavior = MuleExchangeBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+        )
+
+        load_recipe_from_bank_chest_behavior = LoadRecipeFromBankChestBehavior(
+            recovery=blocking_state_recovery,
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            enter_bank_chest_behavior=enter_bank_chest_behavior,
+            unload_behavior=unload_behavior,
+        )
+        load_recipe_behavior = LoadRecipeBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            load_recipe_from_bank_chest_behavior=load_recipe_from_bank_chest_behavior,
+            load_recipe_from_guild_chest_behavior=load_recipe_from_guild_chest_behavior,
+        )
+        craft_behavior = CraftBehavior(
+            recovery=blocking_state_recovery,
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            load_recipe_behavior=load_recipe_behavior,
+            interactive_behavior=interactive_behavior,
+            auto_trip_smart_behavior=auto_trip_world_behavior,
+            pathfinding=path_finding,
+        )
+        harvester = HarvesterBehavior(
+            recovery=blocking_state_recovery,
+            auto_equipment_behavior=auto_equipment_behavior,
+            event_manager=event_manager,
+            collect_behavior=collect_behavior,
+            game_state=game_state,
+            unload_behavior=unload_behavior,
+            random_farm_behavior=random_farm_behavior,
+            fight_behavior=fight_behavior,
+            report_status=harvester_signals.automation_status_changed.emit,
+            _logger=logger,
+        )
+        fighter_behavior = FighterBehavior(
+            recovery=blocking_state_recovery,
+            event_manager=event_manager,
+            attacker_behavior=attacker_behavior,
+            map_move_behavior=map_move_behavior,
+            path_finding=path_finding,
+            random_farm_behavior=random_farm_behavior,
+            game_state=game_state,
+            unload_behavior=unload_behavior,
+            _logger=logger,
+            auto_equipment_behavior=auto_equipment_behavior,
+        )
+
+        fake_bad_movement_behavior = FakeBadMovementBehavior(
+            event_manager=event_manager, game_state=game_state, _logger=logger
+        )
+        mule_accept_kamas_behavior = MuleAcceptBehavior(
+            recovery=blocking_state_recovery,
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            auto_trip_smart_behavior=auto_trip_world_behavior,
+            unload_behavior=unload_behavior,
+            sale_hotel_prices_behavior=sale_hotel_prices_behavior,
+        )
+        idle_behavior = IdleBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+        )
+        connection_behavior = ConnectionBehavior(
+            _logger=logger, event_manager=event_manager, game_state=game_state
+        )
+        character_creation_behavior = CharacterCreationBehavior(
+            _logger=logger, event_manager=event_manager, game_state=game_state
+        )
+        handshake_behavior = HandshakeBehavior(
+            _logger=logger,
+            event_manager=event_manager,
+            game_state=game_state,
+            character_creation_behavior=character_creation_behavior,
+        )
+        multi_farming_behavior = MultiFarmingBehavior(
+            recovery=blocking_state_recovery,
+            event_manager=event_manager,
+            collect_behavior=collect_behavior,
+            game_state=game_state,
+            unload_behavior=unload_behavior,
+            random_farm_behavior=random_farm_behavior,
+            fight_behavior=fight_behavior,
+            report_status=harvester_signals.automation_status_changed.emit,
+            _logger=logger,
+            attacker_behavior=attacker_behavior,
+            auto_equipment_behavior=auto_equipment_behavior,
+        )
+        auto_bot_behavior = AutoBotBehavior(
+            recovery=blocking_state_recovery,
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            auto_equipment_behavior=auto_equipment_behavior,
+            fighter_behavior=fighter_behavior,
+            harvester_behavior=harvester,
+            multi_farming_behavior=multi_farming_behavior,
+            dungeon_behavior=dungeon_behavior,
+            idle_behavior=idle_behavior,
+            craft_behavior=craft_behavior,
+            sale_hotel_sell_behavior=sale_hotel_prices_behavior,
+            report_status=harvester_signals.automation_status_changed.emit,
+        )
+
+        lua_script_behavior = LuaScriptBehavior(
+            event_manager=event_manager,
+            game_state=game_state,
+            _logger=logger,
+            path_finding=path_finding,
+            map_move_behavior=map_move_behavior,
+            collect_behavior=collect_behavior,
+            attacker_behavior=attacker_behavior,
+            auto_trip_behavior=auto_trip_behavior,
+            edge_behavior=edge_behavior,
+            auto_trip_zaap_behavior=auto_trip_zaap_behavior,
+            unload_behavior=unload_behavior,
+            mule_exchange_behavior=mule_exchange_behavior,
+            fight_behavior=fight_behavior,
+            sale_hotel_sell_behavior=sale_hotel_prices_behavior,
+            sale_hotel_reprice_behavior=sale_hotel_reprice_behavior,
+            fight_control=fight_control,
+        )
+
+        fake_bad_interactive_behavior = FakeBadInteractiveBehavior(
+            _logger=logger, event_manager=event_manager, game_state=game_state
+        )
+        hearthbeat_behavior = HearthBeatBehavior(
+            _logger=logger, event_manager=event_manager, game_state=game_state
+        )
+        game_session_behavior = GameSessionBehavior(
+            _logger=logger, event_manager=event_manager, game_state=game_state
+        )
+
+        ogrine_subscription_behavior = OgrineSubscriptionBehavior(
+            _logger=logger,
+            event_manager=event_manager,
+            game_state=game_state,
+            account_id=account.apikey.accountId,
+        )
+        paysafecard_subscription_behavior = PaysafecardSubscriptionBehavior(
+            _logger=logger,
+            event_manager=event_manager,
+            game_state=game_state,
+            account_id=account.apikey.accountId,
+        )
+
+        return Bot(
+            usable_behaviors=[
+                mule_accept_kamas_behavior,
+                mule_give_behavior,
+                dungeon_behavior,
+                sale_hotel_prices_behavior,
+                auto_equipment_behavior,
+                fake_bad_movement_behavior,
+                fake_bad_interactive_behavior,
+                ogrine_subscription_behavior,
+                paysafecard_subscription_behavior,
+            ],
+            account=account,
+            grid_signals=grid_signals,
+            game_info_signals=game_info_signals,
+            bot_signals=harvester_signals,
+            msg_info_signals=msg_info_signals,
+            inventory_signals=inventory_signals,
+            event_manager=event_manager,
+            harvester_behavior=harvester,
+            fight_behavior=fight_behavior,
+            connection_behavior=connection_behavior,
+            game_session_behavior=game_session_behavior,
+            handshake_behavior=handshake_behavior,
+            dungeon_behavior=dungeon_behavior,
+            hearthbeat_behavior=hearthbeat_behavior,
+            frames=[
+                map_frame,
+                player_frame,
+                entity_frame,
+                inventory_frame,
+                interactive_frame,
+                fight_frame,
+                server_frame,
+                guild_chest_frame,
+                sale_hotel_frame,
+                craft_frame,
+                bank_chest_frame,
+                dialog_frame,
+                player_info_snapshot_frame,
+                party_frame,
+                chat_frame,
+            ],
+            world_signals=world_signals,
+            _logger=logger,
+            log_signals=log_signals,
+            game_state=game_state,
+            fighter_behavior=fighter_behavior,
+            craft_behavior=craft_behavior,
+            auto_bot_behavior=auto_bot_behavior,
+            lua_script_behavior=lua_script_behavior,
+            is_playing_event=is_playing_event,
+            shared_signals=shared_signals,
+            is_ready_to_play_event=is_ready_to_play_event,
+            is_connected_event=is_connected_event,
+            is_fake=is_fake,
+            character_creation_behavior=character_creation_behavior,
+            tutorial_behavior=tutorial_behavior,
+            ogrine_subscription_behavior=ogrine_subscription_behavior,
+            paysafecard_subscription_behavior=paysafecard_subscription_behavior,
+            debug_recorder=debug_recorder,
+            play_recorder=play_recorder,
+        )
+
+
+def generate_random_bot() -> Bot:
+    login = f"CertUser{random.randint(1, 10_000)}"
+    return BotFactory.create_bot(
+        SharedSignals(),
+        account=StoredApiKey(
+            apikey=DecipheredApiKey(
+                key="A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6",
+                provider="ankama",
+                refreshToken="X1Y2Z3A4B5C6D7E8F9G0H1I2J3K4L5M6N7O8P9Q0R1S2T3U4V5W6X7Y8Z9",
+                isStayLoggedIn=True,
+                accountId=482395,
+                login=login,
+                certificate=DecipheredCertif(
+                    id=4321,
+                    encodedCertificate=("ABCD1234EFGH5678IJKL9012MNOP3456QRST7890UVWX1234YZAB5678CDEF9012"),
+                    login=login,
+                ),
+                refreshDate=1762825632,
+            ),
+        ),
+        is_fake=True,
+    )

@@ -1,0 +1,215 @@
+import random
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from functools import partial
+
+from DBDofusUnity.datas.protos.non_obf.game.gamemap_pb2 import (
+    FightMapInformationEvent,
+)
+from DBDofusUnity.datas.protos.non_obf.game.roleplay_pb2 import (
+    AttackMonsterRequest,
+)
+
+from src.core import config
+from src.core.behaviors.behavior import Behavior
+from src.core.behaviors.farms.fight.fight_behavior import FightBehavior
+from src.core.behaviors.movements.map_change_behavior import MapChangeError
+from src.core.behaviors.movements.map_move_behavior import MapMoveError
+from src.core.behaviors.movements.map_movement_cancel_behavior import MapMovementCancelBehavior
+from src.core.engine.monsters.monster_group import is_group_targetable
+from src.core.engine.movements.map.path_finding.path_finding import Pathfinding
+from src.core.engine.weights.fighter.weight_monsters import (
+    MonsterGroupToAttack,
+    get_weight_monster_group_grp_to_attack,
+)
+from src.core.signals.bot_signals import BotSignals
+from src.core.signals.player_signals import GameInfoSignals
+from src.services.human_timings import HumanTimingsService
+
+
+@dataclass
+class AttackerBehavior(Behavior):
+    path_finding: Pathfinding
+    map_movement_cancel_behavior: MapMovementCancelBehavior
+    fight_behavior: FightBehavior
+    game_info_signals: GameInfoSignals
+    bot_signals: BotSignals | None = None
+
+    _count_fight_limit: int | None = field(init=False, default=None)
+    _count_fighted_on_map: int = field(init=False, default=0)
+    _wait_for_group: bool = field(init=False, default=False)
+    _get_lvl_limit: Callable[[int], float] = staticmethod(config.get_default_fight_group_lvl_limit)
+    _monster_ids: set[int] | None = field(init=False, default=None)
+    _forbidden_monster_ids: set[int] | None = field(init=False, default=None)
+    _group_size_min: int | None = field(init=False, default=None)
+    _group_size_max: int | None = field(init=False, default=None)
+    _exact_monster_ids: bool = field(init=False, default=False)
+    _only_group_actor_id: int | None = field(init=False, default=None)
+
+    def run(
+        self,
+        count_fight_limit: int | None = 10,
+        wait_for_group: bool = False,
+        get_lvl_limit: Callable[[int], float] | None = None,
+        monster_ids: set[int] | None = None,
+        *,
+        forbidden_monster_ids: set[int] | None = None,
+        group_size_min: int | None = None,
+        group_size_max: int | None = None,
+        exact_monster_ids: bool = False,
+        only_group_actor_id: int | None = None,
+    ) -> None:
+        self._monster_ids = monster_ids
+        self._forbidden_monster_ids = forbidden_monster_ids
+        self._group_size_min = group_size_min
+        self._group_size_max = group_size_max
+        self._exact_monster_ids = exact_monster_ids
+        self._only_group_actor_id = only_group_actor_id
+        if get_lvl_limit:
+            self._get_lvl_limit = get_lvl_limit
+        self._wait_for_group = wait_for_group
+        self._count_fighted_on_map = 0
+        self._count_fight_limit = count_fight_limit
+        self.attack_enemy()
+
+    def attack_enemy(self, excluded_group_actor_id: int | None = None) -> None:
+        monster_group_info = self.get_next_enemy(excluded_group_actor_id)
+        if monster_group_info is None:
+            if self._wait_for_group:
+                return self.run_timer(0.5, self.attack_enemy)
+            return self.finish(count_fighted_on_map=self._count_fighted_on_map)
+
+        self.run_timer(
+            HumanTimingsService().get_timing_attack_on_new_map(),
+            lambda: self.map_movement_cancel_behavior.start(
+                callback=partial(self.on_moved_to_monster, group_actor_id=monster_group_info.actor_id),
+                parent=self,
+                final_move_path=monster_group_info.move_path,
+                cancellation_probability=1 / 3,
+                watch_actor_id=monster_group_info.actor_id,
+            ),
+        )
+
+    def on_moved_to_monster(self, error_code: str | None, group_actor_id: int) -> None:
+        if error_code is not None:
+            if error_code is MapMoveError.UNEXPECTED_NEW_MAP:
+                self.finish(MapChangeError.UNEXPECTED_NEW_MAP)
+                return
+            if error_code is MapMoveError.TARGET_UNREACHABLE:
+                return self.attack_enemy(excluded_group_actor_id=group_actor_id)
+            if error_code in [
+                MapMoveError.INVALID_STARTING_POINT,
+                MapMoveError.CANCELED_MOVEMENT,
+                MapMoveError.REFUSED,
+            ]:
+                return self.attack_enemy()
+            self.raise_if_error(error_code)
+
+        related_actor = self.game_state.entity.actor_by_id.get(group_actor_id)
+        if (
+            related_actor is None
+            or related_actor.disposition.cell_id != self.game_state.map.map_point.cell_id
+        ):
+            self.logger.info(
+                f"Monster group moved out of mp {self.game_state.map.map_point.cell_id} or is not there anymore, "
+                f"skipping."
+            )
+            return self.attack_enemy()
+
+        self.event_manager.on(
+            msg_type=FightMapInformationEvent,
+            callback=self.on_fight_map_information_event,
+            originator=self,
+            once=True,
+            override_on_self=True,
+            timeout=15,
+            on_timeout=partial(self.on_fight_map_information_timeout, group_actor_id),
+        )
+        request = AttackMonsterRequest(monster_group_id=group_actor_id)
+        self.event_manager.send(request)
+
+    def on_fight_map_information_timeout(self, group_actor_id: int) -> None:
+        if self.game_state.fight.in_fight:
+            self.logger.warning(
+                "Fight context entered without FightMapInformationEvent; forcing reconnect to resync"
+            )
+            request_disconnect = self.event_manager.request_disconnect_callback
+            assert request_disconnect is not None, (
+                "Fight initialization recovery requires a disconnect callback"
+            )
+            request_disconnect()
+            return
+        self.attack_enemy(group_actor_id)
+
+    def on_fight_map_information_event(self, msg: FightMapInformationEvent):
+        self.fight_behavior.start(
+            callback=self.on_fight_behavior_finish,
+            parent=self,
+        )
+
+    def on_fight_behavior_finish(self, error_code: str | None):
+        self.raise_if_error(error_code)
+        self._count_fighted_on_map += 1
+        if self.bot_signals:
+            self.game_info_signals.fight_completed.emit(1)
+        if self._count_fight_limit is not None and self._count_fighted_on_map >= self._count_fight_limit:
+            return self.finish(count_fighted_on_map=self._count_fighted_on_map)
+        self.run_timer(
+            HumanTimingsService().get_timing_after_fight(),
+            self.attack_enemy,
+        )
+
+    def get_next_enemy(self, excluded_group_actor_id: int | None = None) -> MonsterGroupToAttack | None:
+        monster_group_infos: list[MonsterGroupToAttack] = []
+        for (
+            actor_id,
+            mp_group,
+            monster_group,
+        ) in self.game_state.entity.get_monster_groups():
+            if actor_id == excluded_group_actor_id:
+                continue
+
+            monster_group_lvl = self.game_state.entity.get_level_monster_group(monster_group)
+            if self._only_group_actor_id is not None and actor_id != self._only_group_actor_id:
+                continue
+            if self._only_group_actor_id is None and not is_group_targetable(
+                self.logger,
+                monster_group,
+                monster_group_lvl,
+                self._get_lvl_limit(self.game_state.player.limited_lvl),
+                self._monster_ids,
+                forbidden_monster_ids=self._forbidden_monster_ids,
+                group_size_min=self._group_size_min,
+                group_size_max=self._group_size_max,
+                exact_monster_ids=self._exact_monster_ids,
+            ):
+                continue
+            move_path_to_group = self.path_finding.find_path(
+                self.game_state.get_map_movement_context(),
+                self.game_state.map.map_point,
+                {mp_group},
+            )
+            if move_path_to_group.end != mp_group:
+                continue
+            monster_group_infos.append(
+                MonsterGroupToAttack(
+                    actor_id=actor_id,
+                    move_path=move_path_to_group,
+                    level=monster_group_lvl,
+                )
+            )
+
+        if len(monster_group_infos) == 0:
+            return None
+
+        return random.choices(
+            monster_group_infos,
+            [
+                get_weight_monster_group_grp_to_attack(
+                    monster_group_info,
+                    self.game_state.inventory.inventory_weight,
+                    self.game_state.inventory.weight_max,
+                )
+                for monster_group_info in monster_group_infos
+            ],
+        )[0]

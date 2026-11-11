@@ -1,0 +1,22 @@
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+
+from src.core.signals.log_signals import LogSignals
+from src.services.logging_utils.log_level import LogLevel
+
+
+@dataclass
+class LogSignalHandler(logging.Handler):
+    def __init__(self, log_signals: LogSignals, *args: Any, **kwargs: Any):
+        self.signals = log_signals
+        super().__init__(*args, **kwargs)
+
+    def emit(self, record: logging.LogRecord):
+        msg = self.format(record)
+        self.signals.publish(
+            LogLevel(record.levelno),
+            msg,
+            datetime.fromtimestamp(record.created),
+        )

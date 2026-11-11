@@ -1,0 +1,97 @@
+from dataclasses import dataclass
+from enum import StrEnum, auto
+
+from DBDofusUnity.datas.protos.non_obf.game.guild_chest_pb2 import (
+    GuildChestCurrentListenersAddEvent,
+)
+from DBDofusUnity.dofus_unity_reader.data_center.map_reader import MapReader
+from DBDofusUnity.dofus_unity_reader.game_constants.element_type import ElementTypeEnum
+from DBDofusUnity.dofus_unity_reader.game_constants.map_id import BANK_MAP_IDS
+from DBDofusUnity.dofus_unity_reader.grid.map_point import MapPoint
+from src.core.behaviors.interactives.interactive_behavior import InteractiveBehavior
+from src.core.behaviors.movements.auto_trip.auto_trip_smart_behavior import (
+    AutoTripSmartBehavior,
+)
+from src.core.behaviors.recovery_behavior import RecoverableBehavior
+from src.core.engine.movements.map.path_finding.path_finding import Pathfinding
+from src.core.states.dialog_state import OpenDialogKind
+from src.services.human_timings import HumanTimingsService
+
+
+class EnterGuildChestError(StrEnum):
+    CANT_ACCESS_GUILD_CHEST = auto()
+    NO_GUILD_CHEST_ELEMENT = auto()
+    NO_GUILD_CHEST_CELL = auto()
+
+
+@dataclass
+class EnterGuildChestBehavior(RecoverableBehavior):
+    interactive_behavior: InteractiveBehavior
+    path_finding: Pathfinding
+    auto_trip_world_behavior: AutoTripSmartBehavior
+
+    def run(self) -> None:
+        self.init_recovery_listeners()
+        self.ensure_free_to_act(lambda: self.start_entering_guild_chest())
+
+    def start_entering_guild_chest(self):
+        if not self.game_state.guild_chest.can_access_guild_chest:
+            return self.finish(error_code=EnterGuildChestError.CANT_ACCESS_GUILD_CHEST)
+
+        if self.game_state.dialog.is_open(OpenDialogKind.GUILD_CHEST):
+            self.logger.info("Guild chest already open, reusing it")
+            return self.finish()
+
+        self.auto_trip_world_behavior.start(
+            callback=self.on_bank_map,
+            parent=self,
+            map_ids=set(BANK_MAP_IDS),
+        )
+
+    def on_bank_map(self, error_code: str | None):
+        if error_code is not None:
+            return self.logger.error(error_code)
+
+        chest_interactive = next(
+            (
+                element
+                for element in self.game_state.interactive.interactive_element_by_id.values()
+                if element.element_type_id == ElementTypeEnum.GUILD_CHEST
+            ),
+            None,
+        )
+        if chest_interactive is None:
+            self.logger.error(
+                f"No guild chest interactive element found on map {self.game_state.map.map_id}"
+            )
+            return self.finish(EnterGuildChestError.NO_GUILD_CHEST_ELEMENT)
+
+        ref_data = MapReader().get_ref_data_by_element_id_by_map_id(self.game_state.map.map_id).get(
+            chest_interactive.element_id
+        )
+        if ref_data is None or ref_data.cellId is None:
+            self.logger.error(
+                f"Guild chest element {chest_interactive.element_id} has no cell reference on map {self.game_state.map.map_id}"
+            )
+            return self.finish(EnterGuildChestError.NO_GUILD_CHEST_CELL)
+        element_mp = MapPoint.from_cell_id(ref_data.cellId)
+
+        self.run_timer(
+            HumanTimingsService().get_timing_base_action(),
+            lambda: self.interactive_behavior.start(
+                element_mp=element_mp,
+                element_id=chest_interactive.element_id,
+                callback=self.on_interactive_behavior_finished,
+                parent=self,
+            ),
+        )
+
+    def on_interactive_behavior_finished(self, error_code: str | None):
+        self.raise_if_error(error_code)
+
+        self.event_manager.on(
+            GuildChestCurrentListenersAddEvent,
+            lambda _: self.finish(),
+            originator=self,
+            once=True,
+        )
